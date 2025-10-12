@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. Redpanda - Kafka Protocol Compatible Broker
   redpanda:
@@ -36,8 +34,6 @@ services:
       - "8123:8123" # HTTP 端口 (用於 API 連線、Grafana 等)
       - "9000:9000" # 原生 TCP 端口 (clickhouse-client 或驅動程式連線用)
     volumes:
-      # 掛載整個 clickhouse/ 目錄到初始化目錄，確保 DDL 腳本按名稱順序執行 (01_tables.sql, 02_views.sql)
-      - ./clickhouse/:/docker-entrypoint-initdb.d/
       # 持久化 ClickHouse 數據
       - clickhouse_data:/var/lib/clickhouse
     environment:
