@@ -1,0 +1,9 @@
+<yandex>
+    <users>
+        <default>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+        </default>
+    </users>
+</yandex>

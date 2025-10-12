@@ -59,7 +59,7 @@ ORDER BY (time_window, dimension_channel);
 -- 3. 查詢視圖 (v_metrics_minutely)
 -- 目的: 簡化最終查詢，將 AggregatingMergeTree 的 State 欄位轉換為最終結果，並批次計算比率。
 -- =========================================================
-CREATE OR REPLACE VIEW v_metrics_minutely AS -- 使用 OR REPLACE 以便您重複執行
+CREATE VIEW v_metrics_minutely AS
 SELECT
     time_window,
     dimension_channel,

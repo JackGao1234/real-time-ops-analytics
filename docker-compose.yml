@@ -1,0 +1,65 @@
+version: '3.8'
+
+services:
+  # 1. Redpanda - Kafka Protocol Compatible Broker
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: redpanda
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      # 監聽內部網路 (9092) 和外部主機 (19092)
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:${KAFKA_EXTERNAL_PORT:-19092}
+      # 廣播地址：關鍵設定，讓外部客戶端 (localhost) 和內部服務 (redpanda:9092) 都能連線
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:${KAFKA_EXTERNAL_PORT:-19092}
+      - --set redpanda.auto_create_topics_enabled=true # 允許自動創建 Topic (開發環境便利)
+    ports:
+      - "${KAFKA_EXTERNAL_PORT:-19092}:${KAFKA_EXTERNAL_PORT:-19092}" # Kafka 協議端口 (外部訪問)
+    networks:
+      - analytic_net
+    healthcheck:
+      test: ["CMD", "rpk", "cluster", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 2. ClickHouse Server - OLAP 分析資料庫
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    # 確保 Redpanda 啟動後才啟動 ClickHouse (處理器依賴)
+    depends_on:
+      - redpanda
+    ports:
+      - "8123:8123" # HTTP 端口 (用於 API 連線、Grafana 等)
+      - "9000:9000" # 原生 TCP 端口 (clickhouse-client 或驅動程式連線用)
+    volumes:
+      # 掛載整個 clickhouse/ 目錄到初始化目錄，確保 DDL 腳本按名稱順序執行 (01_tables.sql, 02_views.sql)
+      - ./clickhouse/:/docker-entrypoint-initdb.d/
+      # 持久化 ClickHouse 數據
+      - clickhouse_data:/var/lib/clickhouse
+    environment:
+      # 來自 .env 文件的自訂帳密。設定這些變數會自動授予網路連線權限。
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+    networks:
+      - analytic_net
+    healthcheck:
+      # 使用 clickhouse-client 進行原生協議檢查，比 cURL 檢查 HTTP 端口更可靠
+      test: ["CMD", "clickhouse-client", "--user", "${CLICKHOUSE_USER}", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s # 給予足夠時間完成初始化
+
+networks:
+  # 專用網路，隔離服務並允許容器名稱解析 (例如 redpanda:9092)
+  analytic_net:
+    driver: bridge
+
+volumes:
+  # 定義持久化卷宗，用於保存 ClickHouse 的數據
+  clickhouse_data:
