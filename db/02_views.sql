@@ -1,29 +1,49 @@
-
--- =========================================================
--- 3. 查詢視圖 (v_metrics_minutely)
--- 目的: 簡化最終查詢，將 AggregatingMergeTree 的 State 欄位轉換為最終結果，並批次計算比率。
--- =========================================================
-CREATE VIEW v_metrics_minutely AS
+CREATE VIEW metrics_aggregated_minutely AS
 SELECT
-    time_window,
-    dimension_channel,
+    -- 1. 最終輸出維度
+    t1.time_window,
+    t1.dimension_channel,
 
-    -- 基礎指標 (SimpleAggregateFunction 直接作為普通欄位)
-    gmv_sum,
-    order_count,
-    refund_sum,
-    refunded_order_count,
+    -- 2. 指標聚合
+    SUM(t1.total_events_count) AS total_events_count,
+    SUM(t1.total_gmv_sum) AS total_gmv_sum,
+    SUM(t1.total_refund_sum) AS total_refund_sum,
+    SUM(t1.total_refunded_order_count) AS total_refunded_order_count,
 
-    -- 轉換 AggregateFunction 狀態
-    finalizeAggregation(unique_orders) AS unique_orders_final,
-    finalizeAggregation(unique_users) AS unique_users_final,
+    -- 3. 終止 AggregateFunction 指標 (近似處理)
+    MAX(t1.unique_orders_count) AS unique_orders_count,
+    MAX(t1.unique_users_count) AS unique_users_count,
 
-    -- 批次/查詢時計算比率
-    -- GMV 退款率: (Total Refund / Total GMV)
-    if(gmv_sum > 0, refund_sum / gmv_sum, 0) AS gmv_refund_rate_ratio,
+    -- 4. 衍生比率計算
+    if(SUM(t1.total_gmv_sum) > 0, SUM(t1.total_refund_sum) / SUM(t1.total_gmv_sum), 0) AS gmv_refund_rate_ratio,
+    if(SUM(t1.total_events_count) > 0, SUM(t1.total_refunded_order_count) / SUM(t1.total_events_count), 0) AS order_refund_rate_ratio
 
-    -- 訂單退款率: (Refunded Order Count / Total Order Count)
-    if(order_count > 0, refunded_order_count / order_count, 0) AS order_refund_rate_ratio
+FROM (
+    -- 第一階段 (t1): 終止聚合狀態，保留所有維度
+    SELECT
+        time_window,
+        event_source,
+        event_type,
+        dimension_channel,
 
-FROM metrics_minutely
-ORDER BY time_window DESC;
+        SUM(total_events_state) AS total_events_count,
+        SUM(total_gmv_state)    AS total_gmv_sum,
+        SUM(refund_sum_state) AS total_refund_sum,
+        SUM(refunded_order_count_state) AS total_refunded_order_count,
+
+        uniqMerge(unique_orders_state) AS unique_orders_count,
+        uniqMerge(unique_users_state)  AS unique_users_count
+
+    FROM metrics_minutely
+    GROUP BY
+        time_window,
+        event_source,
+        event_type,
+        dimension_channel
+) AS t1
+-- 第二階段聚合：只保留 time_window 和 dimension_channel
+GROUP BY
+    t1.time_window,
+    t1.dimension_channel
+
+ORDER BY t1.time_window DESC;

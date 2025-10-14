@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS raw_events (
     event_time DateTime,              -- 事件在來源端實際發生的時間
     ingest_time DateTime DEFAULT now(), -- 事件進入ClickHouse的時間
 
-    -- 事件屬性
+    -- 事件屬性 (使用 LowCardinality 節省空間，加速 WHERE 過濾)
     event_source LowCardinality(String), -- 事件來源 (order, payment)
     event_type LowCardinality(String),   -- 事件具體類型 (order_created, payment_success, refund, etc.)
 
@@ -34,22 +34,26 @@ SETTINGS index_granularity = 8192;
 -- 引擎: AggregatingMergeTree，用於合併 AggregateFunction 狀態。
 -- =========================================================
 CREATE TABLE IF NOT EXISTS metrics_minutely (
-    -- Primary Key / 聚合維度
-    time_window DateTime,
+    -- Primary Key / 聚合維度 (Aggregation Keys)
+    time_window DateTime,                            -- 分鐘時間窗格
+    event_source LowCardinality(String),              -- 聚合鍵 1 (新增)
+    event_type LowCardinality(String),                -- 聚合鍵 2 (新增)
     dimension_channel LowCardinality(String),
 
-    -- GMV 相關 (分母)
-    gmv_sum SimpleAggregateFunction(sum, Float64), -- 該窗口的總銷售額 (GMV)
+    -- 聚合狀態欄位 (State Columns)
 
-    -- 訂單數/計數相關
-    order_count SimpleAggregateFunction(sum, UInt64), -- 總訂單數 (Order Count)
-    unique_orders AggregateFunction(uniq, String),   -- 不重複訂單數
-    unique_users AggregateFunction(uniq, String),    -- 不重複用戶數
+    -- 1. SimpleAggregateFunction: 寫入時傳入原始值，系統自動合併 (Sum)
+    total_events_state SimpleAggregateFunction(sum, UInt64),  -- 總事件數 (Count) (欄位名稱調整)
+    total_gmv_state SimpleAggregateFunction(sum, Float64),      -- GMV 總和 (Sum) (欄位名稱調整)
 
-    -- 退款相關
-    refund_sum SimpleAggregateFunction(sum, Float64),         -- 該窗口的總退款金額 (Numerator for GMV Rate)
-    refunded_order_count SimpleAggregateFunction(sum, UInt64) -- 該窗口發生的退款事件數 (Numerator for Order Rate)
+    -- 2. AggregateFunction: 寫入時必須傳入 State 形式 (如 arrayReduce('uniqState', ...))
+    unique_users_state AggregateFunction(uniq, String),        -- 不重複用戶數的 State (欄位名稱調整)
+    unique_orders_state AggregateFunction(uniq, String),        -- 不重複訂單數的 State (欄位名稱調整)
+
+    -- 3. 退款相關 (SimpleAggregateFunction)
+    refund_sum_state SimpleAggregateFunction(sum, Float64),         -- 該窗口的總退款金額 (Sum) (欄位名稱調整)
+    refunded_order_count_state SimpleAggregateFunction(sum, UInt64) -- 該窗口發生的退款事件數 (Sum) (欄位名稱調整)
 
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(time_window)
-ORDER BY (time_window, dimension_channel);
+ORDER BY (time_window, event_source, event_type, dimension_channel); -- 排序鍵新增 event_source, event_type 以匹配 Processor 邏輯

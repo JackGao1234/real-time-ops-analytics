@@ -38,7 +38,7 @@ class EventSchema(BaseModel):
     order_id: str
     user_id: str
     dimension_channel: str
-    gmv_amount: float = Field(..., ge=0, description="交易金額絕對值")
+    gmv: float = Field(..., description="交易金額絕對值 (GMV 或 Refund Amount)")
 
     # 使用 Pydantic V2 的 @field_validator 取代 @validator
     @field_validator("event_time", mode="before")
@@ -106,7 +106,7 @@ def generate_sample_event(
         "order_id": order_id,
         "user_id": f"user_{random.randint(100, 500)}",
         "dimension_channel": random.choice(CHANNELS),
-        "gmv_amount": amount,
+        "gmv": amount,
     }
 
     # 5. 驗證並序列化為 JSON 字串

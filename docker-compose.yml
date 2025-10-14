@@ -50,6 +50,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s # 給予足夠時間完成初始化
+  # 3. Stream Processor 服務
+  processor:
+    # 使用當前目錄下的 Dockerfile 進行構建
+    build:
+      context: ./processor
+      dockerfile: Dockerfile
+    container_name: processor
+    # 確保 ClickHouse 和 Redpanda 啟動並健康後，Processor 才啟動
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+    # 讓 Processor 使用 processor/.env 檔案
+    env_file:
+      - ./processor/.env
+    networks:
+      - analytic_net
+    # 設置啟動命令，讓它運行 main.py
+    command: python3 main.py
 
 networks:
   # 專用網路，隔離服務並允許容器名稱解析 (例如 redpanda:9092)

@@ -1,0 +1,4 @@
+kafka-python
+clickhouse-connect
+python-dotenv
+pydantic

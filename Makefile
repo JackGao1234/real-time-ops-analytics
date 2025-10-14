@@ -42,9 +42,15 @@ CH_DB := $(shell grep CLICKHOUSE_DB .env | cut -d '=' -f2)
 # 連線 ClickHouse 客戶端 (使用 .env 配置)
 chclient:
 	@echo "=> 連線 ClickHouse 客戶端 (User: $(CH_USER), DB: $(CH_DB))..."
-	clickhouse-client --host 127.0.0.1 --port 9000 --user "$(CH_USER)" --password "$(CH_PASS)" --database "$(CH_DB)"
+	docker exec -it clickhouse clickhouse-client --host 127.0.0.1 --port 9000 --user "$(CH_USER)" --password "$(CH_PASS)" --database "$(CH_DB)"
 
 # 回放腳本 (Reprocessing) - 骨架，用於未來實現
 reprocess:
 	@echo "=> 運行數據回放 (Reprocessing) 腳本 - 待實現"
 	# 範例：./reprocess.sh
+
+# 運行數據處理器 (Processor)
+processor-run:
+	@echo "=> 啟動實時數據處理器 (Docker 容器內)..."
+	# 使用 --force-recreate 確保代碼有更新時能重新啟動
+	docker compose up -d processor
