@@ -7,10 +7,7 @@ import time
 from clickhouse_connect import get_client
 from dotenv import load_dotenv
 from kafka import KafkaConsumer
-
-# =========================================================
-# 載入配置
-# =========================================================
+from typing import List, Dict, Any, Tuple, Set
 
 # =========================================================
 # 核心初始化函數
@@ -23,7 +20,7 @@ def init_clients():
 
     # 1. ClickHouse 配置
     CH_HOST = os.getenv("CH_HOST")
-    CH_PORT = int(os.getenv("CH_PORT", 9000))
+    CH_PORT = 8123
     CH_USER = os.getenv("CH_USER")
     CH_PASSWORD = os.getenv("CH_PASSWORD")
     CH_DATABASE = os.getenv("CH_DATABASE")
@@ -36,6 +33,7 @@ def init_clients():
             username=CH_USER,
             password=CH_PASSWORD,
             database=CH_DATABASE,
+            connect_timeout=10,
         )
         # 簡單測試連線是否成功
         if ch_client.command("SELECT 1"):
@@ -44,6 +42,9 @@ def init_clients():
             raise Exception("ClickHouse 連線測試失敗。")
     except Exception as e:
         print(f"❌ ClickHouse 連線失敗: {e}")
+        import traceback
+
+        traceback.print_exc()
         exit(1)
 
     # 2. Kafka Consumer 配置
@@ -75,25 +76,48 @@ def init_clients():
 # =========================================================
 
 # 用於將 event_time 調整到分鐘開始的時間戳
-def get_minute_start(dt):
+def get_minute_start(dt: datetime.datetime) -> datetime.datetime:
     """將 datetime 物件的時間調整到該分鐘的開始（秒數歸零）"""
     return dt.replace(second=0, microsecond=0)
 
 
-def process_and_insert_batch(ch_client, batch):
+def format_set_to_clickhouse_array_str(data_set: Set[Any]) -> str:
+    """
+    將 Python Set 轉換為 ClickHouse Array 字串，
+    並確保所有元素被單引號包圍。
+    範例: {'u1', 'u2'} -> ['u1','u2']
+    """
+    if not data_set:
+        return "[]"
+
+    # 確保 set 中的每個元素都被轉換為字串並包上單引號
+    elements_str = [f"'{str(item)}'" for item in data_set]
+
+    # 使用 JOIN 將 ['u1', 'u2'] 變成 'u1','u2'
+    return f"[{','.join(elements_str)}]"
+
+
+def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
     """
     接收一個批次的 Kafka 消息，同時寫入 raw_events 和 metrics_minutely。
     """
-
     raw_events_data = []
     # 使用字典進行批次內聚合：Key = (time_window, event_source, event_type, dimension_channel)
-    metrics_aggregation = {}
+    metrics_aggregation: Dict[
+        Tuple[datetime.datetime, str, str, str], Dict[str, Any]
+    ] = {}
 
     # --- 1. 數據清洗與預處理 ---
     for message in batch:
         event_data = message.value
-        event_time_str = event_data["event_time"]
+
+        event_time_str = event_data.get("event_time")
+        if not event_time_str:
+            print("❌ 嚴重警告：事件缺少 'event_time' 字段，跳過此消息。")
+            continue
+
         try:
+            # 處理時間解析
             event_time = datetime.datetime.fromisoformat(event_time_str)
             if event_time.tzinfo is not None:
                 event_time = event_time.astimezone(datetime.timezone.utc).replace(
@@ -107,11 +131,14 @@ def process_and_insert_batch(ch_client, batch):
         channel = event_data.get("dimension_channel", "Unknown")
         event_source = message.topic
         event_type = event_data.get("event_type")
-        order_id = event_data.get("order_id", "")
-        user_id = event_data.get("user_id", "")
+        order_id = str(event_data.get("order_id", ""))
+
+        user_id = str(event_data.get("user_id", ""))
+
         payload_json = json.dumps(event_data)
         is_deleted = 0
 
+        # 寫入 raw_events 的數據格式
         raw_events_data.append(
             (
                 event_id,
@@ -120,23 +147,27 @@ def process_and_insert_batch(ch_client, batch):
                 event_type,
                 order_id,
                 user_id,
+                channel,
                 payload_json,
                 is_deleted,
             )
         )
 
         time_window = get_minute_start(event_time)
-        amount_value = event_data.get("gmv", 0.0)
 
-        # GMV 和 Refund 初始為 0
+        amount_value = event_data.get("amount", 0.0)
+
         gmv_value = 0.0
         refund_amount_value = 0.0
 
         # 根據事件類型分配金額
-        if event_type in ["order_created", "payment_success"]:
+        # 這裡假設 order/payment 事件類型為 "order" 和 "payment"
+        if (
+            event_data.get("source") in ["LowLoadTest", "HighLoadTest"]
+            and event_type == "order"
+        ):
             gmv_value = amount_value  # 記為 GMV
         elif event_type == "payment_refund":
-            # 退款金額計入 refund_sum_state (用正值)
             refund_amount_value = amount_value
 
         agg_key = (time_window, event_source, event_type, channel)
@@ -154,20 +185,18 @@ def process_and_insert_batch(ch_client, batch):
         agg_state = metrics_aggregation[agg_key]
         agg_state["count"] += 1
 
-        # V 關鍵修正 V: 僅將 GMV 數據加到 sum_gmv (Line 114 附近)
         agg_state["sum_gmv"] += gmv_value
 
         agg_state["unique_users"].add(user_id)
         agg_state["unique_orders"].add(order_id)
 
-        # V 關鍵修正 V: 處理退款事件 (Line 118 附近)
         if event_type == "payment_refund":
             agg_state["refund_sum"] += refund_amount_value
             agg_state["refund_count"] += 1
 
     # --- 3. 執行 ClickHouse 寫入 ---
 
-    # 3a. 寫入 raw_events (保持不變)
+    # 3a. 寫入 raw_events
     if raw_events_data:
         try:
             ch_client.insert(
@@ -180,6 +209,7 @@ def process_and_insert_batch(ch_client, batch):
                     "event_type",
                     "order_id",
                     "user_id",
+                    "dimension_channel",
                     "payload_json",
                     "is_deleted",
                 ],
@@ -189,18 +219,10 @@ def process_and_insert_batch(ch_client, batch):
             print(f"❌ ClickHouse 寫入 raw_events 失敗: {e}")
 
     # 3b. 準備並寫入 metrics_minutely (AggregatingMergeTree)
-    metrics_data_rows = []
-    if not metrics_aggregation:
-        logging.warning(
-            "Metrics aggregation resulted in zero rows. Skipping ClickHouse insert."
-        )
-        return
-
-    # -----------------------------------------------------------------------------------
-    # 關鍵修正：將數據轉換為 ClickHouse SQL VALUES 語句需要的字串格式
-    # -----------------------------------------------------------------------------------
-
     values_list = []
+    if not metrics_aggregation:
+        return len(raw_events_data)
+
     for (
         time_window,
         event_source,
@@ -217,23 +239,16 @@ def process_and_insert_batch(ch_client, batch):
         # 2. 轉換 SimpleAggregateFunction 狀態 (直接使用原始值)
         count_str = str(state["count"])
         gmv_str = str(state["sum_gmv"])
-
-        # V 關鍵修正 V: 使用聚合後的退款值
         refund_sum_str = str(state["refund_sum"])
         refund_count_str = str(state["refund_count"])
 
         # 3. 轉換 AggregateFunction 狀態 (這是突破點！)
-        # 我們將 Python Array 轉換為 ClickHouse Array 字串，然後在 VALUES 中使用函數
-        user_arr_str = (
-            f"['{','.join(state['unique_users'])}']" if state["unique_users"] else "[]"
-        )
-        order_arr_str = (
-            f"['{','.join(state['unique_orders'])}']"
-            if state["unique_orders"]
-            else "[]"
-        )
+        # 使用輔助函數將 Set 轉為 ClickHouse 陣列字串
+        user_arr_str = format_set_to_clickhouse_array_str(state["unique_users"])
+        order_arr_str = format_set_to_clickhouse_array_str(state["unique_orders"])
 
         # 組合 ClickHouse 內建函數來產生狀態
+        # 範例: arrayReduce('uniqState', ['user1','user2'])
         unique_users_state_str = f"arrayReduce('uniqState', {user_arr_str})"
         unique_orders_state_str = f"arrayReduce('uniqState', {order_arr_str})"
 
@@ -268,8 +283,6 @@ def process_and_insert_batch(ch_client, batch):
                 VALUES {','.join(values_list)}
             """
 
-            # 執行 INSERT INTO VALUES
-            logging.info(f"DEBUG: 準備寫入 ClickHouse 的行數: {len(values_list)} 條")
             ch_client.command(insert_sql_values)
 
             end_time = time.time()

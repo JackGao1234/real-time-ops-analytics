@@ -1,4 +1,4 @@
-CREATE VIEW metrics_aggregated_minutely AS
+CREATE VIEW IF NOT EXISTS metrics_aggregated_minutely AS
 SELECT
     -- 1. 最終輸出維度
     t1.time_window,

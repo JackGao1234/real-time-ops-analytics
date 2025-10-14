@@ -1,0 +1,5 @@
+# Kafka 客戶端，用於發送事件流
+kafka-python
+
+# (如果用到) dotenv 用於本地測試時讀取 .env
+python-dotenv

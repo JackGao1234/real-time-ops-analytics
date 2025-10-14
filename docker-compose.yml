@@ -34,10 +34,12 @@ services:
       - "8123:8123" # HTTP 端口 (用於 API 連線、Grafana 等)
       - "9000:9000" # 原生 TCP 端口 (clickhouse-client 或驅動程式連線用)
     volumes:
-      # 持久化 ClickHouse 數據
+      # 持久化 ClickHouse 數據 (這個Data Volume必須被移除，DDL 才能重新執行)
       - clickhouse_data:/var/lib/clickhouse
+      # === 確保您的 DDL 檔案掛載在這裡 (這是關鍵) ===
+      - ./db:/docker-entrypoint-initdb.d
     environment:
-      # 來自 .env 文件的自訂帳密。設定這些變數會自動授予網路連線權限。
+      # 來自 .env 文件的自訂帳密。
       - CLICKHOUSE_USER=${CLICKHOUSE_USER}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
       - CLICKHOUSE_DB=${CLICKHOUSE_DB}
@@ -63,9 +65,20 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_started
-    # 讓 Processor 使用 processor/.env 檔案
-    env_file:
-      - ./processor/.env
+    environment:
+      # ClickHouse 連線變數
+      - CH_HOST=clickhouse
+      - CH_PORT=8123
+      - CH_USER=${CLICKHOUSE_USER}
+      - CH_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CH_DATABASE=${CLICKHOUSE_DB}
+
+      # Kafka 連線變數
+      - KAFKA_BROKER_INTERNAL=${KAFKA_BROKER_INTERNAL}
+      - KAFKA_CONSUMER_GROUP=${KAFKA_CONSUMER_GROUP}
+      - ORDER_TOPIC=${ORDER_TOPIC}
+      - PAYMENT_TOPIC=${PAYMENT_TOPIC}
+      - POLL_TIMEOUT_MS=${POLL_TIMEOUT_MS}
     networks:
       - analytic_net
     # 設置啟動命令，讓它運行 main.py
@@ -77,5 +90,5 @@ networks:
     driver: bridge
 
 volumes:
-  # 定義持久化卷宗，用於保存 ClickHouse 的數據
+  # 定義持久化Data Volume，用於保存 ClickHouse 的數據
   clickhouse_data:
