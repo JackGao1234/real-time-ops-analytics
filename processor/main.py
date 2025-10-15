@@ -143,6 +143,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
         payload_json = json.dumps(event_data)
         is_deleted = 0
 
+        # TODO-DIMENSION: 如果 schema 增長，需在此處從 event_data.get() 讀取新的維度。
+        # 範例: region = event_data.get("region", "N/A")
         # 寫入 raw_events 的數據格式
         raw_events_data.append(
             (
@@ -155,6 +157,7 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
                 channel,
                 payload_json,
                 is_deleted,
+                # TODO-DIMENSION: 將新的維度變數加入 raw_events_data 列表中。
             )
         )
 
@@ -175,6 +178,7 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
         elif event_type == "payment_refund":
             refund_amount_value = amount_value
 
+        # TODO-DIMENSION: 如果新增的維度 (如 region) 要作為聚合的 KEY，必須加到這個 Tuple 中
         agg_key = (time_window, event_source, event_type, channel)
 
         if agg_key not in metrics_aggregation:
@@ -185,6 +189,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
                 "unique_orders": set(),
                 "refund_sum": 0.0,
                 "refund_count": 0,
+                # TODO-METRIC: 在此處初始化新的指標，例如:
+                # "total_shipping": 0.0,
             }
 
         agg_state = metrics_aggregation[agg_key]
@@ -199,6 +205,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
             agg_state["refund_sum"] += refund_amount_value
             agg_state["refund_count"] += 1
 
+        # TODO-METRIC: 在此處更新新的指標的聚合邏輯。
+        # 範例: agg_state["total_shipping"] += event_data.get("shipping_fee", 0.0)
     # --- 3. 執行 ClickHouse 寫入 ---
 
     # 3a. 寫入 raw_events
@@ -246,6 +254,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
         gmv_str = str(state["sum_gmv"])
         refund_sum_str = str(state["refund_sum"])
         refund_count_str = str(state["refund_count"])
+        # TODO-METRIC: 轉換新的 SimpleAggregateFunction 狀態
+        # 範例: shipping_str = str(state["total_shipping"])
 
         # 3. 轉換 AggregateFunction 狀態 (這是突破點！)
         # 使用輔助函數將 Set 轉為 ClickHouse 陣列字串
@@ -269,6 +279,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
             refund_count_str,
             unique_users_state_str,
             unique_orders_state_str,
+            # TODO-METRIC: 將新的指標字串加入 row_values
+            # 範例: shipping_str,
         ]
         values_list.append(f"({','.join(row_values)})")
 
@@ -284,6 +296,8 @@ def process_and_insert_batch(ch_client, batch: List[Any]) -> int:
                     total_events_state, total_gmv_state,
                     refund_sum_state, refunded_order_count_state,
                     unique_users_state, unique_orders_state
+                    # TODO-METRIC: 在此處新增對應的 ClickHouse 欄位名稱
+                    # 範例: , total_shipping_state
                 )
                 VALUES {','.join(values_list)}
             """
