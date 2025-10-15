@@ -84,6 +84,25 @@ services:
     # 設置啟動命令，讓它運行 main.py
     command: python3 main.py
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: analytics_api
+    environment:
+      # 將所有必要的環境變數傳遞給 API 服務
+      - CH_HOST=clickhouse
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB}
+    ports:
+      - "8000:8000"  # 將容器的 8000 端口映射到主機的 8000 端口
+    depends_on:
+      clickhouse:
+        condition: service_healthy # 確保 ClickHouse 已經運行且健康
+    networks:
+      - analytic_net
+
 networks:
   # 專用網路，隔離服務並允許容器名稱解析 (例如 redpanda:9092)
   analytic_net:

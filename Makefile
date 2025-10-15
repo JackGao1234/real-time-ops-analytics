@@ -1,4 +1,4 @@
-.PHONY: all up down clean logs shell-redpanda producer producer-high chclient ddl reprocess processor-run topic-check
+.PHONY: all up down clean logs shell-redpanda producer producer-high chclient ddl reprocess processor-run topic-check api-up api-logs
 
 # 預設目標：啟動所有服務
 all: up
@@ -79,3 +79,9 @@ processor-run:
 	@echo "=> 啟動實時數據處理器 (Docker 容器內)..."
 	# 使用 --force-recreate 確保代碼有更新時能重新啟動
 	docker compose up -d processor
+
+api-up:
+	docker compose up -d api
+
+api-logs:
+	docker compose logs -f api

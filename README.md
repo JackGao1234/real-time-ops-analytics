@@ -8,6 +8,7 @@
 
 * **基礎工具:** 確保系統已安裝 **Docker Compose** 和 **Python 3.x**。
 * **配置檔案:** 在專案根目錄創建 `.env`，並依據 `.env_template` 填寫配置。
+* **重要備註:** 如果修改了 API 服務的 Python 程式碼，請務必使用 `docker compose build --no-cache api` 重新構建映像，以避免 Docker 快取問題。
 
 ### 2. 環境啟動 (核心 Make 流程)
 
@@ -18,9 +19,24 @@
 | **I. 啟動基礎設施** | `make up` | 啟動 Redpanda & ClickHouse 容器。 | 一次性啟動。 |
 | **II. 創建資料庫結構** | `make ddl` | 執行所有 `db/*.sql` 腳本。 | **必須執行**，用於創建表格。 |
 | **III. 啟動處理器** | `make processor-run` | 啟動 Python 實時數據處理服務。 | 處理器開始監聽 Kafka。 |
-| **IV. 啟動數據流** | `make producer` | 啟動低負載模擬數據生產者。 | 在**另一個終端**運行。 |
+| **IV. 啟動 API 服務** | `make api-up` | **啟動 FastAPI 查詢服務。** | 服務運行在 **`http://localhost:8000`**。 |
+| **V. 啟動數據流** | `make producer` | 啟動低負載模擬數據生產者。 | 在**另一個終端**運行。 |
 
 ### 3. QA 驗證手冊
+
+我們提供兩種驗證方式：直接資料庫查詢（詳細數據）和 API 接口查詢（服務健康與即時性）。
+
+#### 方式 A: 透過 API 服務驗證 (服務健康與即時性)
+
+API 服務 (運行在 `http://localhost:8000`) 提供了 Swagger UI 介面，可以直接驗證數據管道的端到端結果。
+
+| 驗證項目 | 訪問路徑 (URL) | 目的 |
+| :--- | :--- | :--- |
+| **API 規格** | `http://localhost:8000/docs` | 訪問 OpenAPI 介面，檢查所有端點。 |
+| **原始事件數** | `GET /raw/count` | 驗證 `raw_events` 總數是否持續增加。 |
+| **實時指標** | `GET /metrics/unique_users` | 驗證分鐘級獨立用戶數是否能實時查詢。 |
+
+#### 方式 B: 透過 ClickHouse Client 驗證 (詳細數據)
 
 使用 `make chclient` 進入 ClickHouse 客戶端，執行以下查詢驗證數據：
 
@@ -41,7 +57,6 @@
 | **端到端延遲 (Latency)** | **< 5 秒** | 從 Producer 發送到指標可查詢的時間。 |
 | **數據完整性 (Integrity)** | **高** (最終一致性) | 依賴 ClickHouse 的 `ReplacingMergeTree` 實現 `event_id` 去重。 |
 | **吞吐量 (Throughput)** | **100+ TPS** | 高負載模式 (使用 `make producer-high`) 下需維持穩定。 |
-<!-- 需求是每日數百萬筆, 保守估計1000萬筆, 約116筆/秒 -->
 
 ### 2. 關鍵技術棧
 
@@ -50,6 +65,7 @@
 | **Redpanda** | 替代 Kafka，協議兼容，適用於容器環境，高性能。 |
 | **ClickHouse** | OLAP 數據庫，專注於實時聚合與超高速查詢。 |
 | **Python Processor** | 負責業務邏輯、時間窗劃分、利用 ClickHouse 函數（`uniqState`）進行高效聚合。 |
+| **FastAPI API** | **提供標準化的 REST 接口，讓下游應用程式（如 Dashboard）能輕鬆獲取實時指標。** |
 
 ### 3. 決策與技術權衡 (Trade-offs)
 
@@ -68,6 +84,8 @@
 | `make down` | 停止並移除所有容器。 |
 | `make clean` | 停止、移除容器並**刪除所有 Data Volume** (用於環境重置，將遺失所有數據)。 |
 | `make logs` | 實時追蹤所有服務的日誌。 |
+| `make processor-logs` | 單獨追蹤數據處理器的日誌。 |
+| `make api-logs` | **單獨追蹤 API 服務的日誌。** |
 
 ---
 
