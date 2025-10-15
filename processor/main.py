@@ -9,6 +9,11 @@ from dotenv import load_dotenv
 from kafka import KafkaConsumer
 from typing import List, Dict, Any, Tuple, Set
 
+
+# TODO: 之後如果資料再度增長, 可考慮用Flink做即時處理data loading和metrics transformation
+# Flink: 極低延遲 <-- 在資料量不到太多的情況下使用
+# Spark streaming: 延遲約數秒, 但高吞吐 <-- 暫時不考量, 為更好的達到即時處理
+
 # =========================================================
 # 核心初始化函數
 # =========================================================
